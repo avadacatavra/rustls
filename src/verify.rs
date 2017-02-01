@@ -11,6 +11,10 @@ use pemfile;
 use x509;
 use key;
 use std::io;
+use std::fmt::Write;
+use crossbeam;
+use std::time::Instant;
+use rayon::prelude::*;
 
 /// Disable all verifications, for testing purposes.
 const DANGEROUS_DISABLE_VERIFY: bool = false;
@@ -49,7 +53,7 @@ impl OwnedTrustAnchor {
     }
   }
 
-  fn to_trust_anchor(&self) -> webpki::TrustAnchor {
+  pub fn to_trust_anchor(&self) -> webpki::TrustAnchor {
     webpki::TrustAnchor {
       subject: &self.subject,
       spki: &self.spki,
@@ -75,6 +79,12 @@ impl RootCertStore {
     self.roots.len()
   }
 
+  pub fn get_roots_as_trust_anchor(&self) -> Vec<webpki::TrustAnchor> {
+    self.roots.iter()
+    .map(|x| x.to_trust_anchor())
+    .collect()
+  }
+
   /// Return the Subject Names for certificates in the container.
   pub fn get_subjects(&self) -> DistinguishedNames {
     let mut r = DistinguishedNames::new();
@@ -96,6 +106,7 @@ impl RootCertStore {
     );
 
     let ota = OwnedTrustAnchor::from_trust_anchor(&ta);
+    //this is where i need to check what's going on with the certs
     self.roots.push(ota);
     Ok(())
   }
@@ -127,7 +138,6 @@ impl RootCertStore {
       match self.add(&der) {
         Ok(_) => valid_count += 1,
         Err(err) => {
-          debug!("invalid cert der {:?}", der);
           info!("certificate parsing failed: {:?}", err);
           invalid_count += 1
         }
@@ -147,37 +157,63 @@ impl RootCertStore {
 fn verify_common_cert<'a>(roots: &RootCertStore,
                           presented_certs: &'a [ASN1Cert])
     -> Result<webpki::EndEntityCert<'a>, TLSError> {
+  let now = Instant::now();
   if presented_certs.is_empty() {
     return Err(TLSError::NoCertificatesPresented);
   }
 
-  /* EE cert must appear first. */
+    /* EE cert must appear first. */
   let cert_der = untrusted::Input::from(&presented_certs[0].0);
   let cert = try!(
     webpki::EndEntityCert::from(cert_der)
       .map_err(|err| TLSError::WebPKIError(err))
   );
+  let dur = now.elapsed();
+  info!("end-entity-creation time: {} s {} ns", dur.as_secs(), dur.subsec_nanos());
 
-  let chain: Vec<untrusted::Input> = presented_certs.iter()
+  let c_now = Instant::now();
+  /*let chain: Vec<untrusted::Input> = presented_certs.iter()
+    .skip(1)
+    .map(|cert| untrusted::Input::from(&cert.0))
+    .collect();*/
+
+  /*let chain: Vec<untrusted::Input> = presented_certs.iter()
+    .skip(1)
+    .map(|cert| untrusted::Input::from(&cert.0))
+    .collect();*/
+  let chain: Vec<untrusted::Input> = presented_certs.par_iter()
     .skip(1)
     .map(|cert| untrusted::Input::from(&cert.0))
     .collect();
+  
 
+  let dur = c_now.elapsed();
+  info!("chain-conversion time: {} s {} ns", dur.as_secs(), dur.subsec_nanos());
+
+  let t_now = Instant::now();
   let trustroots: Vec<webpki::TrustAnchor> = roots.roots.iter()
     .map(|x| x.to_trust_anchor())
     .collect();
+  let dur = t_now.elapsed();
+  info!("trust-root-conversion time: {} s {} ns", dur.as_secs(), dur.subsec_nanos());
 
   if DANGEROUS_DISABLE_VERIFY {
     warn!("DANGEROUS_DISABLE_VERIFY is turned on, skipping certificate verification");
     return Ok(cert);
   }
 
-  cert.verify_is_valid_tls_server_cert(&SUPPORTED_SIG_ALGS,
+  let w_now = Instant::now();
+  let r = cert.verify_is_valid_tls_server_cert(&SUPPORTED_SIG_ALGS,
                                        &trustroots,
                                        &chain,
                                        time::get_time())
     .map_err(|err| TLSError::WebPKIError(err))
-    .map(|_| cert)
+    .map(|_| cert);
+  let w_dur = w_now.elapsed();
+  info!("webpki-tls-verif time: {} s {} ns", w_dur.as_secs(), w_dur.subsec_nanos());
+  info!("common-cert time: {} s {} ns", dur.as_secs(), dur.subsec_nanos());
+
+r
 }
 
 /// Verify a the certificate chain `presented_certs` against the roots
@@ -186,15 +222,84 @@ fn verify_common_cert<'a>(roots: &RootCertStore,
 pub fn verify_server_cert(roots: &RootCertStore,
                           presented_certs: &Vec<ASN1Cert>,
                           dns_name: &str) -> Result<(), TLSError> {
+  let now = Instant::now();
   let cert = try!(verify_common_cert(roots, presented_certs));
+  let dur = now.elapsed();
+  info!("total-common-cert time: {} s {} ns", dur.as_secs(), dur.subsec_nanos());
 
   if DANGEROUS_DISABLE_VERIFY {
     warn!("DANGEROUS_DISABLE_VERIFY is turned on, skipping server name verification");
     return Ok(());
   }
 
-  cert.verify_is_valid_for_dns_name(untrusted::Input::from(dns_name.as_bytes()))
-    .map_err(|err| TLSError::WebPKIError(err))
+  let w_now = Instant::now();
+  let r = cert.verify_is_valid_for_dns_name(untrusted::Input::from(dns_name.as_bytes()))
+    .map_err(|err| TLSError::WebPKIError(err));
+  let w_dur = w_now.elapsed();
+
+  let dur = now.elapsed();
+  info!("webpki-verif-dns time: {} s {} ns", w_dur.as_secs(), w_dur.subsec_nanos());
+  info!("server-cert time: {} s {} ns", dur.as_secs(), dur.subsec_nanos());
+  r
+
+}
+
+/*pub fn parallel_verify_server_cert(roots: &RootCertStore,
+                                   presented_certs: &Vec<ASN1Cert>,
+                                   dns_name: &str) -> Result<(), TLSError> {
+
+  let cert_der = untrusted::Input::from(&presented_certs[0].0);
+  let cert = try!(
+    webpki::EndEntityCert::from(cert_der)
+      .map_err(|err| TLSError::WebPKIError(err))
+  );
+
+  let result = crossbeam::scope(|scope| {
+    scope.spawn(move || {
+      verify_common_cert(roots, presented_certs);
+    });
+    let r = scope.spawn(move || {
+      cert.verify_is_valid_for_dns_name(untrusted::Input::from(dns_name.as_bytes()))
+      .map_err(|err| TLSError::WebPKIError(err))
+    });
+    r.join()
+  });
+
+  result
+  
+}*/
+
+pub fn parallel_verify_server_cert(roots: &RootCertStore,
+                                   presented_certs: &Vec<ASN1Cert>,
+                                   dns_name: &str) -> Result<(), TLSError> {
+  let v_now = Instant::now();
+  let result = crossbeam::scope(|scope| {
+    scope.spawn(move || {
+      let now = Instant::now();
+      verify_common_cert(roots, presented_certs);
+      let dur = now.elapsed();
+      info!("common-cert-thread time: {} s {} ns", dur.as_secs(), dur.subsec_nanos());
+    });
+    let r = scope.spawn(move || {
+      let now = Instant::now();
+      let cert_der = untrusted::Input::from(&presented_certs[0].0);
+      let cert = try!(
+        webpki::EndEntityCert::from(cert_der)
+          .map_err(|err| TLSError::WebPKIError(err))
+      );
+      let rc = cert.verify_is_valid_for_dns_name(untrusted::Input::from(dns_name.as_bytes()))
+      .map_err(|err| TLSError::WebPKIError(err));
+      let dur = now.elapsed();
+      info!("dns-thread time: {} s {} ns", dur.as_secs(), dur.subsec_nanos());
+      rc
+    });
+    r.join()
+  });
+  let v_dur = v_now.elapsed();
+  info!("total-parallel-verif time: {} s {} ns", v_dur.as_secs(), v_dur.subsec_nanos());
+
+  result
+  
 }
 
 /// Verify a certificate chain `presented_certs` is rooted in `roots`.
