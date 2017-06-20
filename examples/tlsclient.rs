@@ -15,12 +15,15 @@ extern crate env_logger;
 
 extern crate rustc_serialize;
 extern crate docopt;
+extern crate time;
 use docopt::Docopt;
+
 
 extern crate rustls;
 extern crate webpki_roots;
 
 use rustls::Session;
+use std::time::{Duration,Instant};
 
 const CLIENT: mio::Token = mio::Token(0);
 
@@ -40,10 +43,12 @@ impl TlsClient {
         assert_eq!(ev.token(), CLIENT);
 
         if ev.readiness().is_readable() {
+            //println!("readable");
             self.do_read();
         }
 
         if ev.readiness().is_writable() {
+            //println!("writable");
             self.do_write();
         }
 
@@ -359,12 +364,14 @@ fn lookup_suites(suites: &[String]) -> Vec<&'static rustls::SupportedCipherSuite
 }
 
 fn load_certs(filename: &str) -> Vec<rustls::Certificate> {
+    //println!("Load Certificate ");
     let certfile = fs::File::open(filename).expect("cannot open certificate file");
     let mut reader = BufReader::new(certfile);
     rustls::internal::pemfile::certs(&mut reader).unwrap()
 }
 
 fn load_private_key(filename: &str) -> rustls::PrivateKey {
+    //println!("Load Key ");
     let keyfile = fs::File::open(filename).expect("cannot open private key file");
     let mut reader = BufReader::new(keyfile);
     let keys = rustls::internal::pemfile::rsa_private_keys(&mut reader).unwrap();
@@ -373,9 +380,9 @@ fn load_private_key(filename: &str) -> rustls::PrivateKey {
 }
 
 fn load_key_and_cert(config: &mut rustls::ClientConfig, keyfile: &str, certsfile: &str) {
+    //println!("Load Key and certificate");
     let certs = load_certs(certsfile);
     let privkey = load_private_key(keyfile);
-
     config.set_single_client_cert(certs, privkey);
 }
 
@@ -413,23 +420,46 @@ fn apply_dangerous_options(args: &Args, _: &mut rustls::ClientConfig) {
 
 /// Build a `ClientConfig` from our arguments
 fn make_config(args: &Args) -> Arc<rustls::ClientConfig> {
+    // Cipher suite
     let mut config = rustls::ClientConfig::new();
-
+    
+    let flag_suite =Instant::now();
     if !args.flag_suite.is_empty() {
+        println!("Flag cipher suites are not empty. Looking up suites");
         config.ciphersuites = lookup_suites(&args.flag_suite);
     }
+    let post_flag_suite =Instant::now();
+    println!("Step 1: Cipher suite creation for make_config:::");
+    println!("{:?}",post_flag_suite.duration_since(flag_suite));
 
+    // Root store calculation
+    let cafile =Instant::now();
     if args.flag_cafile.is_some() {
+
+        println!("The CA file is not empty");
         let cafile = args.flag_cafile.as_ref().unwrap();
 
         let certfile = fs::File::open(&cafile).expect("Cannot open CA file");
         let mut reader = BufReader::new(certfile);
+        /*
+        Parse a PEM file and add all certificates found inside. Errors are non-specific; they may be io errors in rd and PEM format errors, but not certificate validity errors.
+
+        This is because large collections of root certificates often include ancient or syntactictally invalid certificates. CAs are competent like that.
+
+        Returns the number of certificates added, and the number which were extracted from the PEM but ultimately unsuitable.
+        */
         config.root_store
             .add_pem_file(&mut reader)
             .unwrap();
+
     } else {
+        println!("Adding Trust Anchors");
         config.root_store.add_trust_anchors(&webpki_roots::ROOTS);
     }
+    let post_cafile =Instant::now();
+    println!("Step 2: CA file creation for make_config:::");
+    println!("{:?}",post_cafile.duration_since(cafile));
+
 
     if args.flag_no_tickets {
         config.enable_tickets = false;
@@ -443,6 +473,7 @@ fn make_config(args: &Args) -> Arc<rustls::ClientConfig> {
 
     apply_dangerous_options(args, &mut config);
 
+    let key_cert_key =Instant::now();
     if args.flag_auth_key.is_some() || args.flag_auth_certs.is_some() {
         load_key_and_cert(&mut config,
                           args.flag_auth_key
@@ -452,7 +483,10 @@ fn make_config(args: &Args) -> Arc<rustls::ClientConfig> {
                               .as_ref()
                               .expect("must provide --auth-certs with --auth-key"));
     }
-
+    let post_key_cert =Instant::now();
+    println!("Step 3: Key and cert load for make_config::");
+    println!("{:?}",post_key_cert.duration_since(key_cert_key));
+    
     Arc::new(config)
 }
 
@@ -460,7 +494,7 @@ fn make_config(args: &Args) -> Arc<rustls::ClientConfig> {
 /// somewhere.
 fn main() {
     let version = env!("CARGO_PKG_NAME").to_string() + ", version: " + env!("CARGO_PKG_VERSION");
-
+    println!("Hi from the other side");
     let args: Args = Docopt::new(USAGE)
         .and_then(|d| Ok(d.help(true)))
         .and_then(|d| Ok(d.version(Some(version))))
@@ -476,11 +510,20 @@ fn main() {
     let port = args.flag_port.unwrap_or(443);
     let addr = lookup_ipv4(args.arg_hostname.as_str(), port);
 
+    //Time taken to create a connector object
+    let start_now =Instant::now();
     let config = make_config(&args);
-
+    let root_now =Instant::now();
+    println!("Time taken to create a connector object::");
+    println!("{:?}",root_now.duration_since(start_now));
+    
+    let post_root = Instant::now(); 
     let sock = TcpStream::connect(&addr).unwrap();
     let mut tlsclient = TlsClient::new(sock, &args.arg_hostname, config);
-
+    let post_connector = Instant::now();
+    println!("Time taken to connect");
+    println!("{:?}",post_connector.duration_since(post_root));
+    
     if args.flag_http {
         let httpreq = format!("GET / HTTP/1.1\r\nHost: {}\r\nConnection: \
                                close\r\nAccept-Encoding: identity\r\n\r\n",
@@ -490,17 +533,20 @@ fn main() {
         let mut stdin = io::stdin();
         tlsclient.read_source_to_end(&mut stdin).unwrap();
     }
-
+    //println!("Checking where this comes"); // check if this comes after cert verification
     let mut poll = mio::Poll::new()
         .unwrap();
     let mut events = mio::Events::with_capacity(32);
+    //println!("cert before");
     tlsclient.register(&mut poll);
+    //println!("cert after");
 
     loop {
         poll.poll(&mut events, None)
             .unwrap();
 
         for ev in events.iter() {
+            //println!("cert now?"); cert verification is happening here
             tlsclient.ready(&mut poll, &ev);
         }
     }
