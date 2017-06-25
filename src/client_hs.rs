@@ -911,21 +911,18 @@ fn emit_clientkx(sess: &mut ClientSessionImpl, kxd: &suites::KeyExchangeResult) 
     sess.common.send_msg(ckx, false);
 }
 
-fn emit_certverify(sess: &mut ClientSessionImpl) {
-    if sess.handshake_data.client_auth_key.is_none() {
+fn emit_certverify(sess: &mut ClientSessionImpl) -> Result<(), TLSError> {
+    if sess.handshake_data.client_auth_signer.is_none() {
         debug!("Not sending CertificateVerify, no key");
         sess.handshake_data.transcript.abandon_client_auth();
-        return;
+        return Ok(());
     }
 
     let message = sess.handshake_data.transcript.take_handshake_buf();
-    let key = sess.handshake_data.client_auth_key.take().unwrap();
-    let sigscheme = sess.handshake_data
-        .client_auth_sigscheme
-        .unwrap();
-    let sig = key.sign(sigscheme, &message)
-        .expect("client auth signing failed unexpectedly");
-    let body = DigitallySignedStruct::new(sigscheme, sig);
+    let signer = sess.handshake_data.client_auth_signer.take().unwrap();
+    let scheme = signer.get_scheme();
+    let sig = signer.sign(&message)?;
+    let body = DigitallySignedStruct::new(scheme, sig);
 
     let m = Message {
         typ: ContentType::Handshake,
@@ -938,6 +935,7 @@ fn emit_certverify(sess: &mut ClientSessionImpl) {
 
     sess.handshake_data.transcript.add_message(&m);
     sess.common.send_msg(m, false);
+    Ok(())
 }
 
 fn emit_ccs(sess: &mut ClientSessionImpl) {
@@ -996,13 +994,11 @@ fn handle_certificate_req(sess: &mut ClientSessionImpl, m: Message) -> StateResu
     let maybe_certkey =
         sess.config.client_auth_cert_resolver.resolve(&canames, &certreq.sigschemes);
 
-    if maybe_certkey.is_some() {
-        let (cert, key) = maybe_certkey.unwrap();
-        let maybe_sigscheme = key.choose_scheme(&certreq.sigschemes);
-        info!("Attempting client auth, will use sigscheme {:?}", maybe_sigscheme);
+    if let Some((cert, key)) = maybe_certkey {
+        info!("Attempting client auth");
+        let maybe_signer = key.choose_scheme(&certreq.sigschemes);
         sess.handshake_data.client_auth_cert = Some(cert);
-        sess.handshake_data.client_auth_key = Some(key);
-        sess.handshake_data.client_auth_sigscheme = maybe_sigscheme;
+        sess.handshake_data.client_auth_signer = maybe_signer;
     } else {
         info!("Client auth requested but no cert/sigscheme available");
     }
@@ -1048,13 +1044,11 @@ fn handle_certificate_req_tls13(sess: &mut ClientSessionImpl,
     let maybe_certkey =
         sess.config.client_auth_cert_resolver.resolve(&canames, &compat_sigschemes);
 
-    if maybe_certkey.is_some() {
-        let (cert, key) = maybe_certkey.unwrap();
-        let maybe_sigscheme = key.choose_scheme(&compat_sigschemes);
-        info!("Attempting client auth, will use sigscheme {:?}", maybe_sigscheme);
+    if let Some((cert, key)) = maybe_certkey {
+        info!("Attempting client auth");
+        let maybe_signer = key.choose_scheme(&compat_sigschemes);
         sess.handshake_data.client_auth_cert = Some(cert);
-        sess.handshake_data.client_auth_key = Some(key);
-        sess.handshake_data.client_auth_sigscheme = maybe_sigscheme;
+        sess.handshake_data.client_auth_signer = maybe_signer;
         sess.handshake_data.client_auth_context = Some(certreq.context.0.clone());
     } else {
         info!("Client auth requested but no cert selected");
@@ -1159,7 +1153,7 @@ fn handle_server_hello_done(sess: &mut ClientSessionImpl,
 
     // 4c.
     if sess.handshake_data.doing_client_auth {
-        emit_certverify(sess);
+        emit_certverify(sess)?;
     }
 
     // 4d.
@@ -1333,8 +1327,7 @@ fn emit_certificate_tls13(sess: &mut ClientSessionImpl) {
 }
 
 fn emit_certverify_tls13(sess: &mut ClientSessionImpl) -> Result<(), TLSError> {
-    if sess.handshake_data.client_auth_sigscheme.is_none() ||
-       sess.handshake_data.client_auth_key.is_none() {
+    if sess.handshake_data.client_auth_signer.is_none() {
         info!("Skipping certverify message (no client scheme/key)");
         return Ok(());
     }
@@ -1344,13 +1337,10 @@ fn emit_certverify_tls13(sess: &mut ClientSessionImpl) -> Result<(), TLSError> {
     message.extend_from_slice(b"TLS 1.3, client CertificateVerify\x00");
     message.extend_from_slice(&sess.handshake_data.transcript.get_current_hash());
 
-    let scheme = sess.handshake_data.client_auth_sigscheme.take().unwrap();
-    let key = sess.handshake_data.client_auth_key.take().unwrap();
-    let sig = try! {
-        key.sign(scheme, &message)
-            .map_err(|_| TLSError::General("cannot sign".to_string()))
-    };
-    let verf = DigitallySignedStruct::new(scheme, sig);
+    let signer = sess.handshake_data.client_auth_signer.take().unwrap();
+    let scheme = signer.get_scheme();
+    let sig = signer.sign(&message)?;
+    let dss = DigitallySignedStruct::new(scheme, sig);
 
     let m = Message {
         typ: ContentType::Handshake,
