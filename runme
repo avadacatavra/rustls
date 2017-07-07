@@ -1,0 +1,12 @@
+#!/bin/sh 
+
+
+
+echo Website '\t' IPv4 Lookup '\t' Lookup Flag suites '\t' Adding Trust Anchors '\t' Load certs and Key '\t' Total time for creating connector object '\t' Total time to connect '\t'Verifying certs '\t' Total time for verification - verify_certs+verify_dns_name  > output.csv
+
+#Enter the websites in the format below.We have removed the functionality of fetching content from websites. To enable that access client_hs.rs, client.rs.. the emit_finished function
+./target/debug/examples/tlsclient --http www.twitter.com >>output.csv
+./target/debug/examples/tlsclient --http www.pinterest.com >>output.csv
+./target/debug/examples/tlsclient --http www.github.com >>output.csv
+./target/debug/examples/tlsclient --http www.hackerrank.com >>output.csv
+./target/debug/examples/tlsclient --http www.cnn.com >>output.csv 
