@@ -12,7 +12,6 @@ use std::collections;
 use std::io::{Read, Write, BufReader};
 
 extern crate env_logger;
-
 extern crate rustc_serialize;
 extern crate docopt;
 extern crate time;
@@ -43,17 +42,15 @@ impl TlsClient {
         assert_eq!(ev.token(), CLIENT);
 
         if ev.readiness().is_readable() {
-            //println!("readable");
             self.do_read();
         }
 
         if ev.readiness().is_writable() {
-            //println!("writable");
             self.do_write();
         }
 
         if self.is_closed() {
-            println!("Connection closed");
+            //println!("Connection closed");
             process::exit(if self.clean_closure { 0 } else { 1 });
         }
 
@@ -108,7 +105,7 @@ impl TlsClient {
 
         // If we're ready but there's no data: EOF.
         if rc.unwrap() == 0 {
-            println!("EOF");
+            //println!("EOF");
             self.closing = true;
             self.clean_closure = true;
             return;
@@ -130,7 +127,7 @@ impl TlsClient {
         // Read it and then write it to stdout.
         let mut plaintext = Vec::new();
         let rc = self.tls_session.read_to_end(&mut plaintext);
-        if !plaintext.is_empty() {
+        if !plaintext.is_empty() { // uncomment this to write data retrieved 
             io::stdout().write_all(&plaintext).unwrap();
         }
 
@@ -138,7 +135,7 @@ impl TlsClient {
         // session closure.
         if rc.is_err() {
             let err = rc.unwrap_err();
-            println!("Plaintext read error: {:?}", err);
+            print!("Plaintext read error: {:?}", err);
             self.clean_closure = err.kind() == io::ErrorKind::ConnectionAborted;
             self.closing = true;
             return;
@@ -364,7 +361,6 @@ fn lookup_suites(suites: &[String]) -> Vec<&'static rustls::SupportedCipherSuite
 }
 
 fn load_certs(filename: &str) -> Vec<rustls::Certificate> {
-    //println!("Load Certificate ");
     let certfile = fs::File::open(filename).expect("cannot open certificate file");
     let mut reader = BufReader::new(certfile);
     rustls::internal::pemfile::certs(&mut reader).unwrap()
@@ -425,18 +421,14 @@ fn make_config(args: &Args) -> Arc<rustls::ClientConfig> {
     
     let flag_suite =Instant::now();
     if !args.flag_suite.is_empty() {
-        println!("Flag cipher suites are not empty. Looking up suites");
         config.ciphersuites = lookup_suites(&args.flag_suite);
     }
-    let post_flag_suite =Instant::now();
-    println!("Step 1: Cipher suite creation for make_config:::");
-    println!("{:?}",post_flag_suite.duration_since(flag_suite));
+    let post_flag_suite = flag_suite.elapsed();
+    print!("{} \t",post_flag_suite.subsec_nanos());
 
     // Root store calculation
     let cafile =Instant::now();
     if args.flag_cafile.is_some() {
-
-        println!("The CA file is not empty");
         let cafile = args.flag_cafile.as_ref().unwrap();
 
         let certfile = fs::File::open(&cafile).expect("Cannot open CA file");
@@ -453,12 +445,10 @@ fn make_config(args: &Args) -> Arc<rustls::ClientConfig> {
             .unwrap();
 
     } else {
-        println!("Adding Trust Anchors");
         config.root_store.add_trust_anchors(&webpki_roots::ROOTS);
     }
-    let post_cafile =Instant::now();
-    println!("Step 2: CA file creation for make_config:::");
-    println!("{:?}",post_cafile.duration_since(cafile));
+    let post_cafile =cafile.elapsed();
+    print!("{} \t",post_cafile.subsec_nanos());
 
 
     if args.flag_no_tickets {
@@ -473,7 +463,7 @@ fn make_config(args: &Args) -> Arc<rustls::ClientConfig> {
 
     apply_dangerous_options(args, &mut config);
 
-    let key_cert_key =Instant::now();
+    let key_cert = Instant::now();
     if args.flag_auth_key.is_some() || args.flag_auth_certs.is_some() {
         load_key_and_cert(&mut config,
                           args.flag_auth_key
@@ -483,9 +473,8 @@ fn make_config(args: &Args) -> Arc<rustls::ClientConfig> {
                               .as_ref()
                               .expect("must provide --auth-certs with --auth-key"));
     }
-    let post_key_cert =Instant::now();
-    println!("Step 3: Key and cert load for make_config::");
-    println!("{:?}",post_key_cert.duration_since(key_cert_key));
+    let post_key_cert = key_cert.elapsed();
+    print!("{} \t",post_key_cert.subsec_nanos());
     
     Arc::new(config)
 }
@@ -494,7 +483,6 @@ fn make_config(args: &Args) -> Arc<rustls::ClientConfig> {
 /// somewhere.
 fn main() {
     let version = env!("CARGO_PKG_NAME").to_string() + ", version: " + env!("CARGO_PKG_VERSION");
-    println!("Hi from the other side");
     let args: Args = Docopt::new(USAGE)
         .and_then(|d| Ok(d.help(true)))
         .and_then(|d| Ok(d.version(Some(version))))
@@ -508,21 +496,25 @@ fn main() {
     }
 
     let port = args.flag_port.unwrap_or(443);
+    print!("{} \t", args.arg_hostname); // website
+
+    let lookup_time = Instant::now();
     let addr = lookup_ipv4(args.arg_hostname.as_str(), port);
+    let lookup_dur = lookup_time.elapsed();
+    print!("{} \t", lookup_dur.subsec_nanos()); // ipv4
+
 
     //Time taken to create a connector object
-    let start_now =Instant::now();
+    let config_now = Instant::now();
     let config = make_config(&args);
-    let root_now =Instant::now();
-    println!("Time taken to create a connector object::");
-    println!("{:?}",root_now.duration_since(start_now));
+    let post_config_now = config_now.elapsed();
+    print!("{} \t",post_config_now.subsec_nanos());
     
-    let post_root = Instant::now(); 
+    let pre_connect = Instant::now(); 
     let sock = TcpStream::connect(&addr).unwrap();
     let mut tlsclient = TlsClient::new(sock, &args.arg_hostname, config);
-    let post_connector = Instant::now();
-    println!("Time taken to connect");
-    println!("{:?}",post_connector.duration_since(post_root));
+    let post_connector = pre_connect.elapsed();
+    print!("{} \t",post_connector.subsec_nanos());
     
     if args.flag_http {
         let httpreq = format!("GET / HTTP/1.1\r\nHost: {}\r\nConnection: \
@@ -533,20 +525,16 @@ fn main() {
         let mut stdin = io::stdin();
         tlsclient.read_source_to_end(&mut stdin).unwrap();
     }
-    //println!("Checking where this comes"); // check if this comes after cert verification
     let mut poll = mio::Poll::new()
         .unwrap();
     let mut events = mio::Events::with_capacity(32);
-    //println!("cert before");
     tlsclient.register(&mut poll);
-    //println!("cert after");
-
+    // certificate verification is happening here actually
     loop {
         poll.poll(&mut events, None)
             .unwrap();
 
         for ev in events.iter() {
-            //println!("cert now?"); cert verification is happening here
             tlsclient.ready(&mut poll, &ev);
         }
     }

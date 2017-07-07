@@ -157,7 +157,6 @@ pub fn fill_in_psk_binder(sess: &mut ClientSessionImpl, hmp: &mut HandshakeMessa
 }
 
 pub fn emit_client_hello(sess: &mut ClientSessionImpl) -> &'static State {
-    println!("Client Hello emitted");
     emit_client_hello_for_retry(sess, None)
 }
 
@@ -183,12 +182,10 @@ fn emit_client_hello_for_retry(sess: &mut ClientSessionImpl,
 
     let mut supported_versions = Vec::new();
     if support_tls13 {
-        println!("TLS 1.3");
         supported_versions.push(ProtocolVersion::Unknown(TLS13_DRAFT));
     }
 
     if support_tls12 {
-        println!("TLS 1.2");
         supported_versions.push(ProtocolVersion::TLSv1_2);
     }
 
@@ -476,7 +473,6 @@ fn process_alpn_protocol(sess: &mut ClientSessionImpl,
 fn handle_server_hello(sess: &mut ClientSessionImpl, m: Message) -> StateResult {
     let server_hello = extract_handshake!(m, HandshakePayload::ServerHello).unwrap();
     debug!("We got ServerHello {:#?}", server_hello);
-    println!("Server Hello");
     match server_hello.server_version {
         ProtocolVersion::TLSv1_2 if sess.config.versions.contains(&ProtocolVersion::TLSv1_2) => {
             sess.common.negotiated_version = Some(ProtocolVersion::TLSv1_2);
@@ -758,7 +754,7 @@ fn handle_certificate_tls13(sess: &mut ClientSessionImpl, m: Message) -> StateRe
         sess.common.send_fatal_alert(AlertDescription::UnsupportedExtension);
         return Err(TLSError::PeerMisbehavedError("bad cert chain extensions".to_string()));
     }
-    println!("Handle certificate TLS13");
+    //println!("Handle certificate TLS13");
     sess.handshake_data.server_cert_chain = cert_chain.convert();
     Ok(&EXPECT_TLS13_CERTIFICATE_VERIFY)
 }
@@ -774,7 +770,6 @@ static EXPECT_TLS13_CERTIFICATE: State = State {
 fn handle_certificate_tls12(sess: &mut ClientSessionImpl, m: Message) -> StateResult {
     let cert_chain = extract_handshake!(m, HandshakePayload::Certificate).unwrap();
     sess.handshake_data.transcript.add_message(&m);
-    println!("Handle certificate TLS 12");
     sess.handshake_data.server_cert_chain = cert_chain.clone();
     Ok(&EXPECT_TLS12_SERVER_KX)
 }
@@ -856,9 +851,8 @@ fn handle_certificate_verify(sess: &mut ClientSessionImpl,
                                                       &sess.handshake_data.server_cert_chain,
                                                       &sess.handshake_data.dns_name)
     };
-    let post_cert_verif_now  =Instant::now();
-    println!("cert verification for TLS 1.3 ::");
-    println!("{:?}",post_cert_verif_now .duration_since(cert_verif_now));
+    let post_cert_verif_now  = cert_verif_now.elapsed();
+    println!("{} \t",post_cert_verif_now .subsec_nanos());
     println!("Use this for verify_is_valid_for_dns_name by cert verification for TLS 1.3- Verify Certs");
 
 
@@ -1115,16 +1109,15 @@ fn handle_server_hello_done(sess: &mut ClientSessionImpl,
     }
 
     //**** Checking for certificate verification timings ***
-    let cert_verif_now =Instant::now();
+    let cert_verif_now = Instant::now();
     try! {
         sess.config.get_verifier().verify_server_cert(&sess.config.root_store,
                                                       &sess.handshake_data.server_cert_chain,
                                                       &sess.handshake_data.dns_name)
     };
-    let post_cert_verif_now  =Instant::now();
-    println!("cert verification::");
-    println!("{:?}",post_cert_verif_now .duration_since(cert_verif_now));
-    println!("Use this for verify_is_valid_for_dns_name by cert verification for TLS 1.3- Verify Certs");
+    let post_cert_verif_now  = cert_verif_now.elapsed();
+    print!("{} \t",post_cert_verif_now.subsec_nanos());
+
 
 
 
@@ -1190,8 +1183,7 @@ fn handle_server_hello_done(sess: &mut ClientSessionImpl,
                                                 &kxd.premaster_secret));
     }
     sess.start_encryption_tls12();
-
-    // 5.
+    // 5. 
     emit_finished(sess);
 
     if sess.handshake_data.must_issue_new_ticket {

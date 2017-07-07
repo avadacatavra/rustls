@@ -520,7 +520,7 @@ impl SessionCommon {
         if self.write_seq >= SEQ_HARD_LIMIT {
             return;
         }
-
+        //print!("encrypt outgoing");
         let em = self.encrypt_outgoing(m);
         self.queue_tls_message(em);
     }

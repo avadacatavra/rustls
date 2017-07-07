@@ -55,12 +55,10 @@ impl ServerCertVerifier for WebPKIVerifier {
                           roots: &RootCertStore,
                           presented_certs: &[Certificate],
                           dns_name: &str) -> Result<(), TLSError> {
-        println!("WebPki verifier");
         let verify_certs_start =Instant::now();
         let cert = try!(self.verify_common_cert(roots, presented_certs));
-        let verify_certs_end =Instant::now();
-        println!("Verify Certs.(Use this to get time for verify_is_valid_tls_server_cert. By this- presented certs- cert chain creation- root store creation)::");
-        println!("{:?}",verify_certs_end.duration_since(verify_certs_start));
+        let verify_certs_end = verify_certs_start.elapsed();
+        print!("{} \t",verify_certs_end.subsec_nanos());
 
         cert.verify_is_valid_for_dns_name(untrusted::Input::from(dns_name.as_bytes()))
             .map_err(TLSError::WebPKIError)
@@ -86,15 +84,10 @@ impl WebPKIVerifier {
                               presented_certs: &'a [Certificate])
                               -> Result<webpki::EndEntityCert<'a>, TLSError> {
 
-        let presented_certs_start =Instant::now();
         if presented_certs.is_empty() {
             return Err(TLSError::NoCertificatesPresented);
         }
-        let presented_certs_end =Instant::now();
-        println!("Time taken for checking if presented certs are empty::");
-        println!("{:?}",presented_certs_end.duration_since(presented_certs_start));
         // EE cert must appear first. chain creation
-        let certificate_start =Instant::now();
         let cert_der = untrusted::Input::from(&presented_certs[0].0);
         let cert = try! {
             webpki::EndEntityCert::from(cert_der)
@@ -104,30 +97,17 @@ impl WebPKIVerifier {
             .skip(1)
             .map(|cert| untrusted::Input::from(&cert.0))
             .collect();
-        let certificate_end =Instant::now();
-        println!("certificate chain creation in WebPKI Verifier::");
-        println!("{:?}",certificate_end.duration_since(certificate_start));
 
         //Roots Creation
-        let root_start =Instant::now();
         let trustroots: Vec<webpki::TrustAnchor> = roots.roots
             .iter()
             .map(|x| x.to_trust_anchor())
             .collect();
-        let root_end =Instant::now();
-        println!("Root store creation in WebPKI Verifier::");
-        println!("{:?}",root_end.duration_since(root_start));
         // Maybe a webpki function.. check this.
-
-
         //let verify_start =Instant::now();
         cert.verify_is_valid_tls_server_cert(SUPPORTED_SIG_ALGS, &trustroots, &chain, time::get_time())
             .map_err(TLSError::WebPKIError)
             .map(|_| cert)
-        //let verify_end =Instant::now();
-        //println!("certificate verification in WebPKI Verifier::");
-        //println!("{:?}",verify_end.duration_since(verify_start));
-
     }
 }
 
@@ -145,7 +125,7 @@ static RSA_PSS_SHA384: SignatureAlgorithms = &[&webpki::RSA_PSS_2048_8192_SHA384
 static RSA_PSS_SHA512: SignatureAlgorithms = &[&webpki::RSA_PSS_2048_8192_SHA512_LEGACY_KEY];
 
 fn convert_scheme(scheme: SignatureScheme) -> Result<SignatureAlgorithms, TLSError> {
-    println!("convert_scheme");
+    //println!("convert_scheme");
     match scheme {
         // nb. for TLS1.2 the curve is not fixed by SignatureScheme.
         
@@ -175,7 +155,6 @@ fn verify_sig_using_any_alg(cert: &webpki::EndEntityCert,
                             -> Result<(), webpki::Error> {
     // TLS doesn't itself give us enough info to map to a single webpki::SignatureAlgorithm.
     // Therefore, convert_algs maps to several and we try them all.
-    println!("verify_sig_using_any_alg");
     for alg in algs {
         match cert.verify_signature(alg,
                                     untrusted::Input::from(message),
@@ -198,7 +177,6 @@ pub fn verify_signed_struct(message: &[u8],
                             dss: &DigitallySignedStruct)
                             -> Result<(), TLSError> {
 
-    println!("verify_signed_struct");
     let possible_algs = try!(convert_scheme(dss.scheme));
     let cert_in = untrusted::Input::from(&cert.0);
     let cert = try! {
@@ -232,7 +210,6 @@ pub fn verify_tls13(cert: &Certificate,
                     handshake_hash: &[u8],
                     context_string_with_0: &[u8])
                     -> Result<(), TLSError> {
-    println!("verify_tls13");
     let alg = try!(convert_alg_tls13(dss.scheme));
 
     let mut msg = Vec::new();
