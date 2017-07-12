@@ -7,6 +7,10 @@ use std::time::{Duration, Instant};
 use std::sync::Arc;
 use std::fs;
 use std::io::{self, Write};
+use std::fs::File;
+use std::path::Path;
+use std::io::Read;
+use std::error::Error;
 
 extern crate rustls;
 use rustls::{ClientConfig, ClientSession};
@@ -17,6 +21,14 @@ use rustls::Session;
 use rustls::Ticketer;
 use rustls::internal::pemfile;
 use rustls::internal::msgs::enums::SignatureAlgorithm;
+
+//FIXME don't c/p common from tests to example
+mod common;
+use common::TlsClient;
+
+fn connect(hostname: &str) -> TlsClient {
+    TlsClient::new(hostname)
+}
 
 fn duration_nanos(d: Duration) -> f64 {
     (d.as_secs() as f64) + (d.subsec_nanos() as f64) / 1e9
@@ -274,8 +286,45 @@ fn bench_bulk(version: rustls::ProtocolVersion, suite: &'static rustls::Supporte
              total_mb as f64 / time_recv);
 }
 
+fn website_bench() {
+    let mut file = match File::open(Path::new("./examples/internal/sites.txt")) {
+        Err(e) => return,   //fail silently
+        Ok(file) => file,
+    };
+
+    let mut sites = String::new();
+    file.read_to_string(&mut sites).unwrap();
+
+    let mut times = vec!();
+    //let mut connect_times = vec!();
+    for line in sites.lines(){
+        let l: Vec<String> = line.split(',').map(|s| s.to_string()).collect();
+        let site = l[0].trim();
+        let expected = l[1].trim();
+
+        // separate out client creation -- tried and resulted in
+        //  Average client creation time: 0.00000007058823529411766
+        //let start = Instant::now();
+        //let mut client = connect(site);
+        //connect_times.push(duration_nanos(Instant::now().duration_since(start)));
+
+        let start = Instant::now();
+        connect(site)
+            .expect(expected)
+            .go()
+            .unwrap();
+        times.push(duration_nanos(Instant::now().duration_since(start)));
+    }
+    println!("{:?}", times);
+
+    //let avg = connect_times.iter().fold(0.0, |a, &b| a + b)/(connect_times.len() as f64);
+    //println!("Average client creation time: {}", avg );
+
+}
+
 fn main() {
-    for version in &[rustls::ProtocolVersion::TLSv1_3, rustls::ProtocolVersion::TLSv1_2] {
+    website_bench();
+    /*for version in &[rustls::ProtocolVersion::TLSv1_3, rustls::ProtocolVersion::TLSv1_2] {
         for suite in &rustls::ALL_CIPHERSUITES {
             if suite.sign == SignatureAlgorithm::ECDSA {
                 // TODO: Need ECDSA server support for this.
@@ -290,5 +339,5 @@ fn main() {
             bench_handshake(*version, suite, ClientAuth::No, Resumption::Tickets);
             bench_handshake(*version, suite, ClientAuth::Yes, Resumption::Tickets);
         }
-    }
+    }*/
 }

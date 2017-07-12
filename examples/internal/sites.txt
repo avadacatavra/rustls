@@ -1,0 +1,17 @@
+github.com, HTTP/1.1 200 OK
+aws.amazon.com, HTTP/1.1 200 OK
+www.microsoft.com, HTTP/1.1 200 OK
+www.wikipedia.org, HTTP/1.1 200 OK
+twitter.com, HTTP/1.1 200 OK
+www.baidu.com, HTTP/1.1 200 OK
+stackoverflow.com, HTTP/1.1 200 OK
+www.apple.com, HTTP/1.1 200 OK
+www.rust-lang.org, HTTP/1.1 200 OK
+servo.org, HTTP/1.1 200 OK
+www.reddit.com, HTTP/1.1 200 OK
+getpocket.com, HTTP/1.1 200 OK
+rustbyexample.com, HTTP/1.1 200 OK
+www.netflix.com, HTTP/1.1
+www.facebook.com, HTTP/1.1
+www.cnn.com, HTTP/1.1
+google.com, HTTP/1.1
